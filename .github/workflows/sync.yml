@@ -30,8 +30,16 @@ jobs:
 
       # ── 2. 登录 DockerHub（可选，避免匿名限速）─────────────
       - name: 🔑 Login to DockerHub (optional)
-        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
-        run: crane auth login index.docker.io -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
+            crane auth login index.docker.io -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
+            echo "✅ DockerHub 已登录"
+          else
+            echo "⏭️ 跳过 DockerHub 登录（未配置凭据，将使用匿名拉取）"
+          fi
 
       # ── 3. 登录阿里云容器镜像服务 ──────────────────────────
       - name: 🔑 Login to Aliyun Registry
