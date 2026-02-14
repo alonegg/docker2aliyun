@@ -1,0 +1,114 @@
+name: "🐳 Sync DockerHub → Aliyun"
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: |
+          源镜像地址（支持多行批量输入，每行一个）
+          示例: vllm/vllm-openai:nightly
+        required: true
+        type: string
+
+# ─── 固化配置 ───────────────────────────────────────────────
+env:
+  REGISTRY: registry.cn-hangzhou.aliyuncs.com
+  NAMESPACE: dslab
+
+jobs:
+  sync:
+    name: "📦 Sync Images"
+    runs-on: ubuntu-latest
+    steps:
+      # ── 1. 安装 crane ──────────────────────────────────────
+      - name: 🔧 Install crane
+        run: |
+          VERSION=$(curl -s "https://api.github.com/repos/google/go-containerregistry/releases/latest" | jq -r '.tag_name')
+          curl -sL "https://github.com/google/go-containerregistry/releases/download/${VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar xzf - crane
+          sudo mv crane /usr/local/bin/
+          crane version
+
+      # ── 2. 登录 DockerHub（可选，避免匿名限速）─────────────
+      - name: 🔑 Login to DockerHub (optional)
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        run: crane auth login index.docker.io -u "${{ secrets.DOCKERHUB_USERNAME }}" -p "${{ secrets.DOCKERHUB_TOKEN }}"
+
+      # ── 3. 登录阿里云容器镜像服务 ──────────────────────────
+      - name: 🔑 Login to Aliyun Registry
+        run: crane auth login "$REGISTRY" -u "${{ secrets.ALIYUN_USERNAME }}" -p "${{ secrets.ALIYUN_PASSWORD }}"
+
+      # ── 4. 同步镜像 ────────────────────────────────────────
+      - name: 🚀 Sync images
+        id: sync
+        run: |
+          set +e  # 允许单个失败不中断整体
+
+          # ── 初始化 Summary 表头 ──
+          echo "## 🐳 镜像同步报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| 状态 | 源镜像 | 阿里云镜像 | 拉取命令 |" >> $GITHUB_STEP_SUMMARY
+          echo "|:----:|--------|-----------|----------|" >> $GITHUB_STEP_SUMMARY
+
+          SUCCESS=0
+          FAIL=0
+          TOTAL=0
+
+          # ── 逐行处理输入 ──
+          while IFS= read -r line; do
+            # 跳过空行和注释行
+            line=$(echo "$line" | xargs)
+            [[ -z "$line" || "$line" == \#* ]] && continue
+
+            TOTAL=$((TOTAL + 1))
+            SRC="$line"
+
+            # ── 解析镜像名和 tag ──
+            # 分离 image:tag
+            if [[ "$SRC" == *:* ]]; then
+              IMAGE_WITH_TAG="$SRC"
+            else
+              IMAGE_WITH_TAG="${SRC}:latest"
+            fi
+
+            IMAGE_PART="${IMAGE_WITH_TAG%%:*}"
+            TAG="${IMAGE_WITH_TAG##*:}"
+
+            # 提取镜像短名（取最后一段 / 后面的部分）
+            if [[ "$IMAGE_PART" == */* ]]; then
+              SHORT_NAME="${IMAGE_PART##*/}"
+            else
+              SHORT_NAME="$IMAGE_PART"
+            fi
+
+            DST="${REGISTRY}/${NAMESPACE}/${SHORT_NAME}:${TAG}"
+
+            echo "────────────────────────────────────────"
+            echo "📦 [$TOTAL] $SRC → $DST"
+            echo "────────────────────────────────────────"
+
+            # ── 执行同步 ──
+            if crane copy "$SRC" "$DST" --platform all 2>&1; then
+              echo "✅ 成功: $SRC"
+              echo "| ✅ | \`$SRC\` | \`${NAMESPACE}/${SHORT_NAME}:${TAG}\` | \`docker pull $DST\` |" >> $GITHUB_STEP_SUMMARY
+              SUCCESS=$((SUCCESS + 1))
+            else
+              echo "❌ 失败: $SRC"
+              echo "| ❌ | \`$SRC\` | - | 同步失败 |" >> $GITHUB_STEP_SUMMARY
+              FAIL=$((FAIL + 1))
+            fi
+            echo ""
+
+          done <<< "${{ inputs.image }}"
+
+          # ── 汇总 ──
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**📊 汇总**: 共 ${TOTAL} 个镜像 · ✅ 成功 ${SUCCESS} · ❌ 失败 ${FAIL}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 🏠 阿里云仓库前缀: \`${REGISTRY}/${NAMESPACE}/\`" >> $GITHUB_STEP_SUMMARY
+
+          # 如果有失败则标记整个 job 为失败
+          if [[ $FAIL -gt 0 ]]; then
+            exit 1
+          fi
