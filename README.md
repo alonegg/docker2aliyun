@@ -4,7 +4,7 @@
 
 ## ✨ 特性
 
-- 🖱️ **一键触发** — GitHub Actions 页面表单输入，无需命令行
+- 🖱️ **一键触发** — GitHub Actions 页面表单输入，或 `gh` CLI 命令行触发
 - 📦 **多架构同步** — 自动同步所有 CPU 架构（amd64/arm64 等）
 - 📋 **批量支持** — 多行输入，一次同步多个镜像
 - 📊 **可视化报告** — Job Summary 表格展示同步结果与拉取命令
@@ -25,7 +25,9 @@
 > - 仓库地址：`registry.cn-hangzhou.aliyuncs.com`
 > - 命名空间：`dslab`
 
-## 🚀 使用方法
+---
+
+## 🚀 方式一：GitHub 网页触发
 
 ### 1. 进入 Actions 页面
 
@@ -55,6 +57,65 @@ Workflow 完成后，点击对应的 run → 查看 **Summary** 页面，你将�
 ```bash
 docker pull registry.cn-hangzhou.aliyuncs.com/dslab/vllm-openai:nightly
 ```
+
+---
+
+## 💻 方式二：`gh` CLI 命令行触发
+
+> 前置：安装 [GitHub CLI](https://cli.github.com/) 并执行 `gh auth login` 完成登录。
+
+### 1. 触发同步
+
+```bash
+# 同步单个镜像
+gh workflow run sync.yml -f image="vllm/vllm-openai:nightly"
+
+# 同步多个镜像（用换行符分隔）
+gh workflow run sync.yml -f image=$'vllm/vllm-openai:nightly\nnginx:latest\npytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime'
+```
+
+> 如果是其他人的仓库，加 `--repo owner/repo` 参数。
+
+### 2. 实时监控日志
+
+```bash
+# 查看最近的运行列表
+gh run list --workflow="sync.yml" --limit 5
+
+# 实时监控最新一次运行（自动刷新，完成后退出）
+gh run watch $(gh run list --workflow="sync.yml" --limit 1 --json databaseId -q '.[0].databaseId')
+```
+
+### 3. 查看运行详情与日志
+
+```bash
+# 查看某次运行的详细步骤
+gh run view <run-id>
+
+# 查看某次运行的完整日志（含 crane 同步的每个 blob 细节）
+gh run view <run-id> --log
+
+# 只看失败步骤的日志
+gh run view <run-id> --log-failed
+```
+
+### 4. 一键触发并等待完成
+
+```bash
+# 触发 + 自动等待 + 完成后显示结果（一条龙）
+gh workflow run sync.yml -f image="vllm/vllm-openai:nightly" \
+  && sleep 5 \
+  && gh run watch $(gh run list --workflow="sync.yml" --limit 1 --json databaseId -q '.[0].databaseId')
+```
+
+### 5. 在浏览器打开查看 Summary
+
+```bash
+# 在浏览器打开最近一次运行的 Summary 页面
+gh run view $(gh run list --workflow="sync.yml" --limit 1 --json databaseId -q '.[0].databaseId') --web
+```
+
+---
 
 ## 📐 镜像名映射规则
 
