@@ -9,6 +9,14 @@ on:
           示例: vllm/vllm-openai:nightly
         required: true
         type: string
+      method:
+        description: "同步方式：crane（快速轻量）或 docker（稳定可靠，适合大镜像）"
+        required: true
+        type: choice
+        default: docker
+        options:
+          - docker
+          - crane
 
 # ─── 固化配置 ───────────────────────────────────────────────
 env:
@@ -17,11 +25,12 @@ env:
 
 jobs:
   sync:
-    name: "📦 Sync Images"
+    name: "📦 Sync Images (${{ inputs.method }})"
     runs-on: ubuntu-latest
     steps:
-      # ── 1. 安装 crane ──────────────────────────────────────
+      # ── 1. 安装 crane（仅 crane 模式）─────────────────────
       - name: 🔧 Install crane
+        if: inputs.method == 'crane'
         run: |
           VERSION=$(curl -s "https://api.github.com/repos/google/go-containerregistry/releases/latest" | jq -r '.tag_name')
           curl -sL "https://github.com/google/go-containerregistry/releases/download/${VERSION}/go-containerregistry_Linux_x86_64.tar.gz" | tar xzf - crane
@@ -35,7 +44,11 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
-            crane auth login index.docker.io -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
+            if [[ "${{ inputs.method }}" == "crane" ]]; then
+              crane auth login index.docker.io -u "$DOCKERHUB_USERNAME" -p "$DOCKERHUB_TOKEN"
+            else
+              echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+            fi
             echo "✅ DockerHub 已登录"
           else
             echo "⏭️ 跳过 DockerHub 登录（未配置凭据，将使用匿名拉取）"
@@ -43,16 +56,36 @@ jobs:
 
       # ── 3. 登录阿里云容器镜像服务 ──────────────────────────
       - name: 🔑 Login to Aliyun Registry
-        run: crane auth login "$REGISTRY" -u "${{ secrets.ALIYUN_USERNAME }}" -p "${{ secrets.ALIYUN_PASSWORD }}"
+        run: |
+          if [[ "${{ inputs.method }}" == "crane" ]]; then
+            crane auth login "$REGISTRY" -u "${{ secrets.ALIYUN_USERNAME }}" -p "${{ secrets.ALIYUN_PASSWORD }}"
+          else
+            echo "${{ secrets.ALIYUN_PASSWORD }}" | docker login "$REGISTRY" -u "${{ secrets.ALIYUN_USERNAME }}" --password-stdin
+          fi
+          echo "✅ 阿里云 Registry 已登录"
 
-      # ── 4. 同步镜像 ────────────────────────────────────────
+      # ── 4. 磁盘空间清理（docker 模式，大镜像需要空间）─────
+      - name: 🧹 Free disk space (docker mode)
+        if: inputs.method == 'docker'
+        run: |
+          echo "清理前磁盘空间:"
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo docker system prune -af
+          echo "清理后磁盘空间:"
+          df -h /
+
+      # ── 5. 同步镜像 ────────────────────────────────────────
       - name: 🚀 Sync images
         id: sync
         run: |
           set +e  # 允许单个失败不中断整体
+          METHOD="${{ inputs.method }}"
 
           # ── 初始化 Summary 表头 ──
           echo "## 🐳 镜像同步报告" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 📋 同步方式: **${METHOD}**" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| 状态 | 源镜像 | 阿里云镜像 | 拉取命令 |" >> $GITHUB_STEP_SUMMARY
           echo "|:----:|--------|-----------|----------|" >> $GITHUB_STEP_SUMMARY
@@ -71,7 +104,6 @@ jobs:
             SRC="$line"
 
             # ── 解析镜像名和 tag ──
-            # 分离 image:tag
             if [[ "$SRC" == *:* ]]; then
               IMAGE_WITH_TAG="$SRC"
             else
@@ -91,11 +123,29 @@ jobs:
             DST="${REGISTRY}/${NAMESPACE}/${SHORT_NAME}:${TAG}"
 
             echo "────────────────────────────────────────"
-            echo "📦 [$TOTAL] $SRC → $DST"
+            echo "📦 [$TOTAL] $SRC → $DST (method: $METHOD)"
             echo "────────────────────────────────────────"
 
             # ── 执行同步 ──
-            if crane copy "$SRC" "$DST" --platform all 2>&1; then
+            SYNC_OK=false
+            if [[ "$METHOD" == "crane" ]]; then
+              # ─ crane 模式：直接 registry-to-registry 复制 ─
+              if crane copy "$SRC" "$DST" --platform all 2>&1; then
+                SYNC_OK=true
+              fi
+            else
+              # ─ docker 模式：pull → tag → push ─
+              if docker pull "$SRC" 2>&1; then
+                docker tag "$SRC" "$DST"
+                if docker push "$DST" 2>&1; then
+                  SYNC_OK=true
+                fi
+                # 清理本地镜像释放空间
+                docker rmi "$SRC" "$DST" 2>/dev/null || true
+              fi
+            fi
+
+            if [[ "$SYNC_OK" == "true" ]]; then
               echo "✅ 成功: $SRC"
               echo "| ✅ | \`$SRC\` | \`${NAMESPACE}/${SHORT_NAME}:${TAG}\` | \`docker pull $DST\` |" >> $GITHUB_STEP_SUMMARY
               SUCCESS=$((SUCCESS + 1))

@@ -5,10 +5,23 @@
 ## ✨ 特性
 
 - 🖱️ **一键触发** — GitHub Actions 页面表单输入，或 `gh` CLI 命令行触发
+- 🔄 **双模式同步** — `docker`（稳定可靠，默认）和 `crane`（快速轻量）可选
 - 📦 **多架构同步** — 自动同步所有 CPU 架构（amd64/arm64 等）
 - 📋 **批量支持** — 多行输入，一次同步多个镜像
 - 📊 **可视化报告** — Job Summary 表格展示同步结果与拉取命令
 - 🔐 **安全** — 凭据通过 GitHub Secrets 管理，不会泄露
+
+## ⚙️ 同步方式对比
+
+| 特性 | 🐳 `docker`（默认） | 🏗️ `crane` |
+|------|-------------------|------------|
+| **原理** | pull → tag → push | registry-to-registry API 直传 |
+| **可靠性** | ✅ 非常稳定，Docker 原生 | ⚠️ 超大镜像可能遇到 HTTP/2 流错误 |
+| **速度** | 较慢（需落盘） | 快（无需 Docker daemon） |
+| **多架构** | 拉取当前平台架构 | ✅ 自动复制所有架构 |
+| **适用场景** | 大镜像（>5GB）、需要稳定 | 小/中镜像、需要多架构 |
+
+> **推荐**：大镜像（如 `vllm-openai`）使用 `docker`，小镜像使用 `crane`。
 
 ## 🔧 前置配置
 
@@ -67,11 +80,14 @@ docker pull registry.cn-hangzhou.aliyuncs.com/dslab/vllm-openai:nightly
 ### 1. 触发同步
 
 ```bash
-# 同步单个镜像
-gh workflow run sync.yml -f image="vllm/vllm-openai:nightly"
+# 使用 docker 模式同步（默认，稳定可靠）
+gh workflow run sync.yml -f image="vllm/vllm-openai:nightly" -f method="docker"
+
+# 使用 crane 模式同步（快速，适合小镜像）
+gh workflow run sync.yml -f image="vllm/vllm-openai:nightly" -f method="crane"
 
 # 同步多个镜像（用换行符分隔）
-gh workflow run sync.yml -f image=$'vllm/vllm-openai:nightly\nnginx:latest\npytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime'
+gh workflow run sync.yml -f image=$'vllm/vllm-openai:nightly\nnginx:latest' -f method="docker"
 ```
 
 > 如果是其他人的仓库，加 `--repo owner/repo` 参数。
