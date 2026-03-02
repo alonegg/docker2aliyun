@@ -32,7 +32,7 @@ jobs:
           SOURCE_IMAGE="diygod/rsshub:latest"
           TARGET_IMAGE="${REGISTRY_HOST}/${NAMESPACE}/rsshub:latest"
           echo "Syncing $SOURCE_IMAGE to $TARGET_IMAGE"
-          crane cp "$SOURCE_IMAGE" "$TARGET_IMAGE"
+          crane cp --platform linux/amd64 "$SOURCE_IMAGE" "$TARGET_IMAGE"
           
           # Also sync specific tags if needed, e.g., chromium-bundled
           # SOURCE_IMAGE_CB="diygod/rsshub:chromium-bundled"
