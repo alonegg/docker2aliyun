@@ -1,0 +1,132 @@
+name: Sync DockerHub Image to Aliyun ACR
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_image:
+        description: "DockerHub image (repo[:tag]), e.g. vllm/vllm-openai:nightly"
+        required: true
+        type: string
+      target_repository:
+        description: "Optional Aliyun repository name override, e.g. vllm-openai"
+        required: false
+        default: ""
+        type: string
+      target_tag:
+        description: "Optional target tag override, defaults to source tag"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Validate and preview only (do not copy image)"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_HOST: registry.cn-hangzhou.aliyuncs.com
+      NAMESPACE: dslab
+    outputs:
+      source_ref: ${{ steps.resolve.outputs.source_ref }}
+      target_ref: ${{ steps.resolve.outputs.target_ref }}
+      target_console_ref: ${{ steps.resolve.outputs.target_console_ref }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve source and target image refs
+        id: resolve
+        run: |
+          python scripts/resolve_sync_params.py \
+            --source-image "${{ inputs.source_image }}" \
+            --target-repository "${{ inputs.target_repository }}" \
+            --target-tag "${{ inputs.target_tag }}"
+
+      - name: Validate required Aliyun secrets
+        env:
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ALIYUN_USERNAME}" ] || [ -z "${ALIYUN_PASSWORD}" ]; then
+            echo "::error::Missing required secrets: ALIYUN_USERNAME and ALIYUN_PASSWORD."
+            exit 1
+          fi
+
+      - name: Validate optional DockerHub credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${DOCKERHUB_USERNAME}" ] && [ -z "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::DOCKERHUB_USERNAME is set but DOCKERHUB_TOKEN is missing."
+            exit 1
+          fi
+          if [ -z "${DOCKERHUB_USERNAME}" ] && [ -n "${DOCKERHUB_TOKEN}" ]; then
+            echo "::error::DOCKERHUB_TOKEN is set but DOCKERHUB_USERNAME is missing."
+            exit 1
+          fi
+
+      - name: Setup crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Login to DockerHub (optional)
+        if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "${DOCKERHUB_TOKEN}" | crane auth login docker.io -u "${DOCKERHUB_USERNAME}" --password-stdin
+
+      - name: Login to Aliyun ACR
+        env:
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "${ALIYUN_PASSWORD}" | crane auth login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
+
+      - name: Sync image
+        if: ${{ !inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          crane cp "${{ steps.resolve.outputs.source_ref }}" "${{ steps.resolve.outputs.target_ref }}"
+
+      - name: Emit target image notice
+        if: ${{ always() }}
+        run: |
+          echo "::notice title=Aliyun Target Image::${{ steps.resolve.outputs.target_ref }}"
+
+      - name: Publish run summary
+        if: ${{ always() }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            status="DRY RUN (no image copied)"
+          else
+            status="SYNCED"
+          fi
+
+          {
+            echo "## DockerHub -> Aliyun Sync Result"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Source Image | \`${{ steps.resolve.outputs.source_ref }}\` |"
+            echo "| Target Image | \`${{ steps.resolve.outputs.target_ref }}\` |"
+            echo "| Aliyun Console Ref | \`${{ steps.resolve.outputs.target_console_ref }}\` |"
+            echo "| Status | ${status} |"
+            echo
+            echo "Final target address:"
+            echo
+            echo "\`${{ steps.resolve.outputs.target_ref }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

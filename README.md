@@ -1,157 +1,61 @@
-# 🐳 DockerHub → Aliyun 镜像同步工具
+# DockerHub 镜像同步到阿里云 ACR（GitHub Action）
 
-一键将 DockerHub 镜像同步至阿里云容器镜像服务，基于 GitHub Actions + [crane](https://github.com/google/go-containerregistry)。
+这个仓库提供一个手动触发的 GitHub Action，把 DockerHub 镜像同步到阿里云 ACR。
 
-## ✨ 特性
+示例：  
+`vllm/vllm-openai:nightly` -> `registry.cn-hangzhou.aliyuncs.com/dslab/vllm-openai:nightly`
 
-- 🖱️ **一键触发** — GitHub Actions 页面表单输入，或 `gh` CLI 命令行触发
-- 🔄 **双模式同步** — `docker`（稳定可靠，默认）和 `crane`（快速轻量）可选
-- 📦 **多架构同步** — 自动同步所有 CPU 架构（amd64/arm64 等）
-- 📋 **批量支持** — 多行输入，一次同步多个镜像
-- 📊 **可视化报告** — Job Summary 表格展示同步结果与拉取命令
-- 🔐 **安全** — 凭据通过 GitHub Secrets 管理，不会泄露
+## 1. 前置配置
 
-## ⚙️ 同步方式对比
+在 GitHub 仓库 `Settings -> Secrets and variables -> Actions` 中配置：
 
-| 特性 | 🐳 `docker`（默认） | 🏗️ `crane` |
-|------|-------------------|------------|
-| **原理** | pull → tag → push | registry-to-registry API 直传 |
-| **可靠性** | ✅ 非常稳定，Docker 原生 | ⚠️ 超大镜像可能遇到 HTTP/2 流错误 |
-| **速度** | 较慢（需落盘） | 快（无需 Docker daemon） |
-| **多架构** | 拉取当前平台架构 | ✅ 自动复制所有架构 |
-| **适用场景** | 大镜像（>5GB）、需要稳定 | 小/中镜像、需要多架构 |
+| 名称 | 必需 | 说明 |
+| --- | --- | --- |
+| `ALIYUN_USERNAME` | 是 | 阿里云容器镜像服务用户名 |
+| `ALIYUN_PASSWORD` | 是 | 阿里云容器镜像服务密码 |
+| `DOCKERHUB_USERNAME` | 否（推荐） | DockerHub 用户名（私有仓库/限流场景推荐） |
+| `DOCKERHUB_TOKEN` | 否（推荐） | DockerHub Personal Access Token |
 
-> **推荐**：大镜像（如 `vllm-openai`）使用 `docker`，小镜像使用 `crane`。
+固定参数已在 workflow 内置：
+- `REGISTRY_HOST=registry.cn-hangzhou.aliyuncs.com`
+- `NAMESPACE=dslab`
 
-## 🔧 前置配置
+## 2. 用户如何优雅输入同步需求
 
-在 GitHub 仓库 **Settings → Secrets and variables → Actions** 中配置：
+### 方式 A：GitHub Web UI（推荐）
 
-| Secret 名称 | 必需 | 说明 |
-|---|---|---|
-| `ALIYUN_USERNAME` | ✅ | 阿里云容器镜像服务用户名 |
-| `ALIYUN_PASSWORD` | ✅ | 阿里云容器镜像服务密码 |
-| `DOCKERHUB_USERNAME` | ⚠️ 推荐 | DockerHub 用户名（避免匿名限速） |
-| `DOCKERHUB_TOKEN` | ⚠️ 推荐 | DockerHub Personal Access Token |
+1. 打开 `Actions` 页面。
+2. 选择工作流 `Sync DockerHub Image to Aliyun ACR`。
+3. 点击 `Run workflow`，填写参数：
+- `source_image`（必填）：DockerHub 镜像，格式 `repo[:tag]`，如 `vllm/vllm-openai:nightly`
+- `target_repository`（可选）：目标仓库名覆盖，默认取源镜像最后一段（`vllm-openai`）
+- `target_tag`（可选）：目标 tag 覆盖，默认等于源 tag
+- `dry_run`（可选）：先预览，不执行复制
 
-> **已固化配置**（无需修改）：
-> - 仓库地址：`registry.cn-hangzhou.aliyuncs.com`
-> - 命名空间：`dslab`
-
----
-
-## 🚀 方式一：GitHub 网页触发
-
-### 1. 进入 Actions 页面
-
-打开仓库 → **Actions** tab → 左侧选择 **"🐳 Sync DockerHub → Aliyun"**
-
-### 2. 点击 "Run workflow"
-
-在输入框中填写要同步的镜像，每行一个：
-
-```
-vllm/vllm-openai:nightly
-pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
-nginx:latest
-```
-
-### 3. 查看结果
-
-Workflow 完成后，点击对应的 run → 查看 **Summary** 页面，你将看到：
-
-| 状态 | 源镜像 | 阿里云镜像 | 拉取命令 |
-|:----:|--------|-----------|----------|
-| ✅ | `vllm/vllm-openai:nightly` | `dslab/vllm-openai:nightly` | `docker pull registry.cn-hangzhou.aliyuncs.com/dslab/vllm-openai:nightly` |
-| ✅ | `nginx:latest` | `dslab/nginx:latest` | `docker pull registry.cn-hangzhou.aliyuncs.com/dslab/nginx:latest` |
-
-### 4. 拉取镜像
+### 方式 B：GitHub CLI
 
 ```bash
-docker pull registry.cn-hangzhou.aliyuncs.com/dslab/vllm-openai:nightly
+gh workflow run sync-dockerhub-to-aliyun.yml \
+  -f source_image="vllm/vllm-openai:nightly" \
+  -f target_repository="" \
+  -f target_tag="" \
+  -f dry_run=false
 ```
 
----
+## 3. Action 完成后如何展示同步地址
 
-## 💻 方式二：`gh` CLI 命令行触发
+工作流会在 `Run summary` 输出一张结果表，包含：
+- Source Image
+- Target Image
+- Aliyun Console Ref
+- Status
 
-> 前置：安装 [GitHub CLI](https://cli.github.com/) 并执行 `gh auth login` 完成登录。
+其中 `Target Image` 就是你需要复制/分发的最终地址，例如：
 
-### 1. 触发同步
+`registry.cn-hangzhou.aliyuncs.com/dslab/vllm-openai:nightly`
 
-```bash
-# 使用 docker 模式同步（默认，稳定可靠）
-gh workflow run sync.yml -f image="vllm/vllm-openai:nightly" -f method="docker"
+## 4. 推荐使用流程
 
-# 使用 crane 模式同步（快速，适合小镜像）
-gh workflow run sync.yml -f image="vllm/vllm-openai:nightly" -f method="crane"
-
-# 同步多个镜像（用换行符分隔）
-gh workflow run sync.yml -f image=$'vllm/vllm-openai:nightly\nnginx:latest' -f method="docker"
-```
-
-> 如果是其他人的仓库，加 `--repo owner/repo` 参数。
-
-### 2. 实时监控日志
-
-```bash
-# 查看最近的运行列表
-gh run list --workflow="sync.yml" --limit 5
-
-# 实时监控最新一次运行（自动刷新，完成后退出）
-gh run watch $(gh run list --workflow="sync.yml" --limit 1 --json databaseId -q '.[0].databaseId')
-```
-
-### 3. 查看运行详情与日志
-
-```bash
-# 查看某次运行的详细步骤
-gh run view <run-id>
-
-# 查看某次运行的完整日志（含 crane 同步的每个 blob 细节）
-gh run view <run-id> --log
-
-# 只看失败步骤的日志
-gh run view <run-id> --log-failed
-```
-
-### 4. 一键触发并等待完成
-
-```bash
-# 触发 + 自动等待 + 完成后显示结果（一条龙）
-gh workflow run sync.yml -f image="vllm/vllm-openai:nightly" \
-  && sleep 5 \
-  && gh run watch $(gh run list --workflow="sync.yml" --limit 1 --json databaseId -q '.[0].databaseId')
-```
-
-### 5. 在浏览器打开查看 Summary
-
-```bash
-# 在浏览器打开最近一次运行的 Summary 页面
-gh run view $(gh run list --workflow="sync.yml" --limit 1 --json databaseId -q '.[0].databaseId') --web
-```
-
----
-
-## 📐 镜像名映射规则
-
-| 源镜像 | 阿里云镜像 | 规则 |
-|--------|-----------|------|
-| `vllm/vllm-openai:nightly` | `dslab/vllm-openai:nightly` | 取 `/` 后的部分 |
-| `nvidia/cuda:12.0-base` | `dslab/cuda:12.0-base` | 取最后一段 |
-| `nginx:latest` | `dslab/nginx:latest` | 无 `/`，直接使用 |
-| `nginx` | `dslab/nginx:latest` | 自动补 `:latest` |
-
-## ❓ FAQ
-
-**Q: workflow_dispatch 在哪里触发？**
-> Actions tab → 左侧 workflow 列表 → 选择 workflow → 右上角 "Run workflow" 按钮
-
-**Q: 同步速度如何？**
-> crane 直接操作 registry API（不经过 Docker daemon），通常 1-3 分钟完成一个镜像
-
-**Q: 支持私有镜像吗？**
-> 支持。配置 `DOCKERHUB_USERNAME` 和 `DOCKERHUB_TOKEN` 后即可拉取私有镜像
-
-**Q: 支持非 DockerHub 的源吗？**
-> 支持。crane 兼容任何 OCI 标准仓库，输入完整地址即可，如 `ghcr.io/owner/image:tag`
+1. 先用 `dry_run=true` 验证映射结果是否符合预期。
+2. 再用 `dry_run=false` 执行实际同步。
+3. 在 `Run summary` 复制最终目标地址。

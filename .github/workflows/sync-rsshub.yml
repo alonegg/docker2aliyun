@@ -1,0 +1,40 @@
+name: Sync RSSHub to Aliyun
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * *' # Run daily at 02:00 UTC
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      REGISTRY_HOST: registry.cn-hangzhou.aliyuncs.com
+      NAMESPACE: dslab
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Login to Aliyun ACR
+        env:
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "${ALIYUN_PASSWORD}" | crane auth login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
+
+      - name: Sync image
+        run: |
+          set -euo pipefail
+          SOURCE_IMAGE="diygod/rsshub:latest"
+          TARGET_IMAGE="${REGISTRY_HOST}/${NAMESPACE}/rsshub:latest"
+          echo "Syncing $SOURCE_IMAGE to $TARGET_IMAGE"
+          crane cp "$SOURCE_IMAGE" "$TARGET_IMAGE"
+          
+          # Also sync specific tags if needed, e.g., chromium-bundled
+          # SOURCE_IMAGE_CB="diygod/rsshub:chromium-bundled"
+          # TARGET_IMAGE_CB="${REGISTRY_HOST}/${NAMESPACE}/rsshub:chromium-bundled"
+          # crane cp "$SOURCE_IMAGE_CB" "$TARGET_IMAGE_CB"
