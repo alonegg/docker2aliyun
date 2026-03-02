@@ -24,7 +24,7 @@ jobs:
           ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           set -euo pipefail
-          echo "${ALIYUN_PASSWORD}" | crane auth login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
+          echo "${ALIYUN_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
 
       - name: Sync image
         run: |
@@ -32,7 +32,9 @@ jobs:
           SOURCE_IMAGE="diygod/rsshub:latest"
           TARGET_IMAGE="${REGISTRY_HOST}/${NAMESPACE}/rsshub:latest"
           echo "Syncing $SOURCE_IMAGE to $TARGET_IMAGE"
-          crane cp --platform linux/amd64 "$SOURCE_IMAGE" "$TARGET_IMAGE"
+          docker pull "$SOURCE_IMAGE"
+          docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
+          docker push "$TARGET_IMAGE"
           
           # Also sync specific tags if needed, e.g., chromium-bundled
           # SOURCE_IMAGE_CB="diygod/rsshub:chromium-bundled"
