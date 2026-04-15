@@ -59,3 +59,41 @@ gh workflow run sync-dockerhub-to-aliyun.yml \
 1. 先用 `dry_run=true` 验证映射结果是否符合预期。
 2. 再用 `dry_run=false` 执行实际同步。
 3. 在 `Run summary` 复制最终目标地址。
+
+## 5. 已同步镜像列表
+
+所有镜像前缀为 `registry.cn-hangzhou.aliyuncs.com/dslab/`。
+
+### 自动定时同步
+
+| 镜像 | 源 | 调度 |
+| --- | --- | --- |
+| `rsshub:latest` | `diygod/rsshub:latest` | 每日 02:00 UTC（`sync-rsshub.yml`） |
+
+### 按需手动同步（已完成）
+
+**基础镜像**
+
+| 镜像 | 源 |
+| --- | --- |
+| `python:3.12-slim-bookworm` | `python:3.12-slim-bookworm` |
+| `nginx:1.27-alpine` | `nginx:1.27-alpine` |
+
+**数据库 / 存储 / 中间件**
+
+| 镜像 | 源 |
+| --- | --- |
+| `postgres:18-alpine` | `postgres:18-alpine` |
+| `valkey:9.0-alpine` | `valkey/valkey:9.0-alpine` |
+| `minio:latest` | `minio/minio:latest` |
+| `elasticmq-native:1.5.7` | `softwaremill/elasticmq-native:1.5.7` |
+| `dynamodb-local:2.5.2` | `amazon/dynamodb-local:2.5.2` |
+
+**工具 / 应用**
+
+| 镜像 | 源 |
+| --- | --- |
+| `aws-cli:2.17.0` | `amazon/aws-cli:2.17.0` |
+| `netbox:v4.5-4.0.1` | `netboxcommunity/netbox:v4.5-4.0.1` |
+
+> 需要新镜像时走 `Sync DockerHub Image to Aliyun ACR` 工作流，同步成功后请补充到上面的表格。
