@@ -90,6 +90,19 @@ jobs:
             echo "DockerHub credentials not configured; continuing with anonymous pull."
           fi
 
+      - name: Login to NVIDIA NGC nvcr.io (optional)
+        env:
+          NGC_USERNAME: ${{ secrets.NGC_USERNAME }}
+          NGC_PASSWORD: ${{ secrets.NGC_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NGC_USERNAME}" ] && [ -n "${NGC_PASSWORD}" ]; then
+            echo "${NGC_PASSWORD}" | crane auth login nvcr.io -u "${NGC_USERNAME}" --password-stdin
+            echo "Logged into nvcr.io. nvcr.io/* sources can now be pulled."
+          else
+            echo "NGC credentials not configured; nvcr.io pulls will be anonymous (and will likely fail for private/NVAIE images)."
+          fi
+
       - name: Login to Aliyun ACR
         env:
           ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
