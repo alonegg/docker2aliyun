@@ -111,43 +111,40 @@ jobs:
           set -euo pipefail
           echo "${ALIYUN_PASSWORD}" | crane auth login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
 
-      # nvcr.io's auth challenge omits `service=`, which trips crane (issues a
-      # GET /proxy_auth?service=  → 401). Docker's auth flow works around it.
-      # We special-case nvcr.io sources to use docker pull/tag/push.
-      - name: docker login nvcr.io (for NGC sync path)
+      # nvcr.io's WWW-Authenticate header has empty `service=`, which crane
+      # (and docker login) propagate as-is — proxy_auth then 401s. skopeo
+      # handles this case cleanly: it falls back to using the registry hostname
+      # as service when the challenge omits it.
+      - name: Install skopeo (for nvcr.io path)
         if: ${{ !inputs.dry_run && startsWith(steps.resolve.outputs.source_ref, 'nvcr.io/') }}
-        env:
-          NGC_USERNAME: ${{ secrets.NGC_USERNAME }}
-          NGC_PASSWORD: ${{ secrets.NGC_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${NGC_USERNAME}" ] || [ -z "${NGC_PASSWORD}" ]; then
-            echo "::error::Source is nvcr.io/* but NGC_USERNAME / NGC_PASSWORD secrets are not set."
-            exit 1
-          fi
-          echo "${NGC_PASSWORD}" | docker login nvcr.io -u "${NGC_USERNAME}" --password-stdin
-
-      - name: docker login Aliyun ACR (for NGC sync path)
-        if: ${{ !inputs.dry_run && startsWith(steps.resolve.outputs.source_ref, 'nvcr.io/') }}
-        env:
-          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
-          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          echo "${ALIYUN_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+          skopeo --version
 
       - name: Sync image
         if: ${{ !inputs.dry_run }}
         env:
           SOURCE_REF: ${{ steps.resolve.outputs.source_ref }}
           TARGET_REF: ${{ steps.resolve.outputs.target_ref }}
+          NGC_USERNAME: ${{ secrets.NGC_USERNAME }}
+          NGC_PASSWORD: ${{ secrets.NGC_PASSWORD }}
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           set -euo pipefail
           if [[ "$SOURCE_REF" == nvcr.io/* ]]; then
-            echo "Source is nvcr.io — using docker pull/tag/push (crane has an auth-flow bug with NGC)."
-            docker pull "$SOURCE_REF"
-            docker tag "$SOURCE_REF" "$TARGET_REF"
-            docker push "$TARGET_REF"
+            echo "Source is nvcr.io — using skopeo (handles NGC's non-standard auth challenge)."
+            if [ -z "${NGC_USERNAME}" ] || [ -z "${NGC_PASSWORD}" ]; then
+              echo "::error::nvcr.io source requires NGC_USERNAME and NGC_PASSWORD secrets."
+              exit 1
+            fi
+            skopeo copy --multi-arch all \
+              --src-creds "${NGC_USERNAME}:${NGC_PASSWORD}" \
+              --dest-creds "${ALIYUN_USERNAME}:${ALIYUN_PASSWORD}" \
+              "docker://${SOURCE_REF}" \
+              "docker://${TARGET_REF}"
           else
             crane cp "$SOURCE_REF" "$TARGET_REF"
           fi
