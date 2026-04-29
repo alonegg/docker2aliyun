@@ -140,8 +140,11 @@ jobs:
           # Bearer dance with explicit service=nvcr.io (crane/skopeo both fail
           # to set service= because nvcr.io's WWW-Authenticate leaves it empty).
           AUTH_URL="https://nvcr.io/proxy_auth?service=nvcr.io&scope=repository:${REPO}:pull"
+          # Hardcode '$oauthtoken' as username — it's NGC's well-known marker
+          # for "use the API key as password", not a real account name.
+          # GH Actions secret with literal '$oauthtoken' was getting mangled.
           AUTH_RESP=$(curl -sS -w '\n__HTTP_CODE__%{http_code}' \
-            -u "${NGC_USERNAME}:${NGC_PASSWORD}" "${AUTH_URL}")
+            -u '$oauthtoken'":${NGC_PASSWORD}" "${AUTH_URL}")
           AUTH_CODE="${AUTH_RESP##*__HTTP_CODE__}"
           AUTH_BODY="${AUTH_RESP%__HTTP_CODE__*}"
           echo "auth HTTP ${AUTH_CODE}"
