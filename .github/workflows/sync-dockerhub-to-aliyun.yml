@@ -111,20 +111,13 @@ jobs:
           set -euo pipefail
           echo "${ALIYUN_PASSWORD}" | crane auth login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
 
-      # nvcr.io's WWW-Authenticate header has empty `service=`, which crane
-      # (and docker login) propagate as-is — proxy_auth then 401s. skopeo
-      # handles this case cleanly: it falls back to using the registry hostname
-      # as service when the challenge omits it.
-      - name: Install skopeo (for nvcr.io path)
+      # nvcr.io's WWW-Authenticate has empty service=. crane and skopeo both
+      # propagate it as-is and fail. We do the Bearer dance ourselves: grab a
+      # token with explicit service=nvcr.io, then hand it to crane via a
+      # docker config.json that contains the Bearer token as the password.
+      # Works for any source the key has scope for (NVAIE, etc.).
+      - name: NGC manual Bearer auth + crane cp (for nvcr.io path)
         if: ${{ !inputs.dry_run && startsWith(steps.resolve.outputs.source_ref, 'nvcr.io/') }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq skopeo
-          skopeo --version
-
-      - name: Sync image
-        if: ${{ !inputs.dry_run }}
         env:
           SOURCE_REF: ${{ steps.resolve.outputs.source_ref }}
           TARGET_REF: ${{ steps.resolve.outputs.target_ref }}
@@ -134,20 +127,58 @@ jobs:
           ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           set -euo pipefail
-          if [[ "$SOURCE_REF" == nvcr.io/* ]]; then
-            echo "Source is nvcr.io — using skopeo (handles NGC's non-standard auth challenge)."
-            if [ -z "${NGC_USERNAME}" ] || [ -z "${NGC_PASSWORD}" ]; then
-              echo "::error::nvcr.io source requires NGC_USERNAME and NGC_PASSWORD secrets."
-              exit 1
-            fi
-            skopeo copy --multi-arch all \
-              --src-creds "${NGC_USERNAME}:${NGC_PASSWORD}" \
-              --dest-creds "${ALIYUN_USERNAME}:${ALIYUN_PASSWORD}" \
-              "docker://${SOURCE_REF}" \
-              "docker://${TARGET_REF}"
-          else
-            crane cp "$SOURCE_REF" "$TARGET_REF"
+          if [ -z "${NGC_USERNAME}" ] || [ -z "${NGC_PASSWORD}" ]; then
+            echo "::error::nvcr.io source requires NGC_USERNAME and NGC_PASSWORD secrets."
+            exit 1
           fi
+
+          # Extract repo path (strip nvcr.io/ prefix and :tag suffix)
+          REPO="${SOURCE_REF#nvcr.io/}"
+          REPO="${REPO%:*}"
+          echo "scope: repository:${REPO}:pull"
+
+          # Bearer dance with explicit service=nvcr.io
+          TOKEN=$(curl -fsS -u "${NGC_USERNAME}:${NGC_PASSWORD}" \
+            "https://nvcr.io/proxy_auth?service=nvcr.io&scope=repository:${REPO}:pull" \
+            | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+          if [ -z "${TOKEN}" ]; then
+            echo "::error::Could not obtain Bearer token for ${REPO} (key lacks scope?)"
+            exit 1
+          fi
+          echo "Got Bearer token (${#TOKEN} chars)."
+
+          # Write a docker config that crane will pick up. The Bearer token is
+          # placed as the auth string for nvcr.io. crane sends it as
+          # 'Authorization: Bearer <token>' on registry calls.
+          mkdir -p ~/.docker
+          python3 -c "
+          import json, os, base64
+          tok = os.environ['TOKEN']
+          cfg = {'auths': {
+              'nvcr.io': {'registrytoken': tok},
+              'https://nvcr.io/v2/': {'registrytoken': tok},
+          }}
+          with open(os.path.expanduser('~/.docker/config.json'),'w') as f:
+              json.dump(cfg, f)
+          "
+
+          # Aliyun login (crane reads docker config; layer Aliyun auth on top)
+          echo "${ALIYUN_PASSWORD}" | crane auth login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
+
+          # Copy
+          crane cp --platform=all "${SOURCE_REF}" "${TARGET_REF}"
+        env:
+          REGISTRY_HOST: registry.cn-hangzhou.aliyuncs.com
+          NAMESPACE: dslab
+
+      - name: Sync image (non-nvcr.io path via crane)
+        if: ${{ !inputs.dry_run && !startsWith(steps.resolve.outputs.source_ref, 'nvcr.io/') }}
+        env:
+          SOURCE_REF: ${{ steps.resolve.outputs.source_ref }}
+          TARGET_REF: ${{ steps.resolve.outputs.target_ref }}
+        run: |
+          set -euo pipefail
+          crane cp "$SOURCE_REF" "$TARGET_REF"
 
       - name: Emit target image notice
         if: ${{ always() }}
