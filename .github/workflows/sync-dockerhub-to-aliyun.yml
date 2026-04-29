@@ -173,18 +173,16 @@ jobs:
           # multi-GB blob fetches (NIM images). Putting the API key as
           # password lets the auth client get fresh tokens per blob.
           mkdir -p ~/.docker
-          AUTH_B64=$(printf '%s:%s' '$oauthtoken' "${NGC_PASSWORD}" | base64 -w0)
-          python3 -c 'import json,os; json.dump({"auths":{"nvcr.io":{"auth":os.environ["AUTH_B64"]}}}, open(os.path.expanduser("~/.docker/config.json"),"w"))' AUTH_B64="$AUTH_B64"
-
-          # Aliyun creds in same config (docker auth format).
-          ALIYUN_AUTH_B64=$(printf '%s:%s' "${ALIYUN_USERNAME}" "${ALIYUN_PASSWORD}" | base64 -w0)
+          export AUTH_B64=$(printf '%s:%s' '$oauthtoken' "${NGC_PASSWORD}" | base64 -w0)
+          export ALIYUN_AUTH_B64=$(printf '%s:%s' "${ALIYUN_USERNAME}" "${ALIYUN_PASSWORD}" | base64 -w0)
           python3 -c '
-          import json,os
-          p = os.path.expanduser("~/.docker/config.json")
-          d = json.load(open(p))
-          d["auths"]["registry.cn-hangzhou.aliyuncs.com"] = {"auth": os.environ["ALIYUN_AUTH_B64"]}
-          json.dump(d, open(p, "w"))
-          ' ALIYUN_AUTH_B64="$ALIYUN_AUTH_B64"
+          import json, os
+          cfg = {"auths": {
+              "nvcr.io": {"auth": os.environ["AUTH_B64"]},
+              "registry.cn-hangzhou.aliyuncs.com": {"auth": os.environ["ALIYUN_AUTH_B64"]},
+          }}
+          json.dump(cfg, open(os.path.expanduser("~/.docker/config.json"), "w"))
+          '
 
           # Pull -> tag -> push via docker (handles auth refresh per blob).
           # docker uses ~/.docker/config.json auth entries directly.
