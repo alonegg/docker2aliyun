@@ -212,15 +212,22 @@ jobs:
           ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
         run: |
           set -uo pipefail
-          # crane preserves multi-arch but Aliyun ACR rejects OCI manifest
-          # types (BLOB_TYPE_INVALID). Try crane first; fallback to docker
-          # (writes Docker v2 manifest format which Aliyun accepts).
-          if crane cp "$SOURCE_REF" "$TARGET_REF" 2>&1 | tee /tmp/crane.out; then
-            echo "crane copy succeeded."
-            exit 0
-          fi
-          if grep -qE 'BLOB_TYPE_INVALID|unknown manifest class|application/vnd\.oci' /tmp/crane.out; then
-            echo "crane failed with OCI/Aliyun-compat issue — fallback to docker pull/tag/push."
+          # Try crane up to 2 times (Aliyun ACR returns transient HTTP/2 stream
+          # errors mid-upload). If still fails, fall back to docker pull/tag/push
+          # — which uses HTTP/1.1, writes Docker manifest v2 format, and avoids
+          # both the OCI compat issue and the stream-error issue.
+          attempt=0
+          while [ $attempt -lt 2 ]; do
+            attempt=$((attempt + 1))
+            echo "crane cp attempt $attempt/2"
+            if crane cp "$SOURCE_REF" "$TARGET_REF" 2>&1 | tee /tmp/crane.out; then
+              echo "crane copy succeeded on attempt $attempt."
+              exit 0
+            fi
+            sleep 5
+          done
+          if grep -qE 'BLOB_TYPE_INVALID|unknown manifest class|application/vnd\.oci|stream error|INTERNAL_ERROR' /tmp/crane.out; then
+            echo "crane failed (compat / transient) — fallback to docker pull/tag/push."
             echo "${ALIYUN_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
             docker pull "${SOURCE_REF}"
             docker tag "${SOURCE_REF}" "${TARGET_REF}"
