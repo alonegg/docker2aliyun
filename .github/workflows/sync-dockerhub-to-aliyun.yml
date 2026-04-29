@@ -139,11 +139,20 @@ jobs:
 
           # Bearer dance with explicit service=nvcr.io (crane/skopeo both fail
           # to set service= because nvcr.io's WWW-Authenticate leaves it empty).
-          TOKEN=$(curl -fsS -u "${NGC_USERNAME}:${NGC_PASSWORD}" \
-            "https://nvcr.io/proxy_auth?service=nvcr.io&scope=repository:${REPO}:pull" \
-            | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+          AUTH_URL="https://nvcr.io/proxy_auth?service=nvcr.io&scope=repository:${REPO}:pull"
+          AUTH_RESP=$(curl -sS -w '\n__HTTP_CODE__%{http_code}' \
+            -u "${NGC_USERNAME}:${NGC_PASSWORD}" "${AUTH_URL}")
+          AUTH_CODE="${AUTH_RESP##*__HTTP_CODE__}"
+          AUTH_BODY="${AUTH_RESP%__HTTP_CODE__*}"
+          echo "auth HTTP ${AUTH_CODE}"
+          if [ "${AUTH_CODE}" != "200" ]; then
+            echo "::error::Token request failed: HTTP ${AUTH_CODE}"
+            echo "${AUTH_BODY}" | head -c 500
+            exit 1
+          fi
+          TOKEN=$(echo "${AUTH_BODY}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
           if [ -z "${TOKEN}" ]; then
-            echo "::error::No Bearer token (key lacks scope for ${REPO}? Check Payment Required)"
+            echo "::error::Got 200 but no token field. Body: ${AUTH_BODY}"
             exit 1
           fi
           echo "Got Bearer token (${#TOKEN} chars)."
