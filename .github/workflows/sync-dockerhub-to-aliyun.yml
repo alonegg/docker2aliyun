@@ -132,6 +132,13 @@ jobs:
             exit 1
           fi
 
+          # Diagnostics
+          echo "DEBUG: NGC_PASSWORD length = ${#NGC_PASSWORD}"
+          echo "DEBUG: NGC_PASSWORD prefix = ${NGC_PASSWORD:0:6}"
+          echo "DEBUG: runner external IP = $(curl -s --max-time 5 https://api.ipify.org)"
+          echo "DEBUG: anonymous /v2/ probe (expect 401 + WWW-Authenticate):"
+          curl -sI -A 'docker/24.0.0' https://nvcr.io/v2/ | head -5
+
           # Strip nvcr.io/ prefix and :tag to get repo path for scope.
           REPO="${SOURCE_REF#nvcr.io/}"
           REPO="${REPO%:*}"
@@ -140,10 +147,10 @@ jobs:
           # Bearer dance with explicit service=nvcr.io (crane/skopeo both fail
           # to set service= because nvcr.io's WWW-Authenticate leaves it empty).
           AUTH_URL="https://nvcr.io/proxy_auth?service=nvcr.io&scope=repository:${REPO}:pull"
-          # nvcr.io's edge nginx rejects bare curl UAs; mimic docker client.
+          # Try via -u then via explicit Authorization header.
           AUTH_RESP=$(curl -sS -w '\n__HTTP_CODE__%{http_code}' \
             -A 'docker/24.0.0 (linux)' \
-            -u '$oauthtoken'":${NGC_PASSWORD}" "${AUTH_URL}")
+            --basic -u "\$oauthtoken:${NGC_PASSWORD}" "${AUTH_URL}")
           AUTH_CODE="${AUTH_RESP##*__HTTP_CODE__}"
           AUTH_BODY="${AUTH_RESP%__HTTP_CODE__*}"
           echo "auth HTTP ${AUTH_CODE}"
