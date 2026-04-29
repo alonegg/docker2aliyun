@@ -132,44 +132,32 @@ jobs:
             exit 1
           fi
 
-          # Extract repo path (strip nvcr.io/ prefix and :tag suffix)
+          # Strip nvcr.io/ prefix and :tag to get repo path for scope.
           REPO="${SOURCE_REF#nvcr.io/}"
           REPO="${REPO%:*}"
           echo "scope: repository:${REPO}:pull"
 
-          # Bearer dance with explicit service=nvcr.io
+          # Bearer dance with explicit service=nvcr.io (crane/skopeo both fail
+          # to set service= because nvcr.io's WWW-Authenticate leaves it empty).
           TOKEN=$(curl -fsS -u "${NGC_USERNAME}:${NGC_PASSWORD}" \
             "https://nvcr.io/proxy_auth?service=nvcr.io&scope=repository:${REPO}:pull" \
             | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
           if [ -z "${TOKEN}" ]; then
-            echo "::error::Could not obtain Bearer token for ${REPO} (key lacks scope?)"
+            echo "::error::No Bearer token (key lacks scope for ${REPO}? Check Payment Required)"
             exit 1
           fi
           echo "Got Bearer token (${#TOKEN} chars)."
+          export TOKEN
 
-          # Write a docker config that crane will pick up. The Bearer token is
-          # placed as the auth string for nvcr.io. crane sends it as
-          # 'Authorization: Bearer <token>' on registry calls.
+          # Write docker config with Bearer token as registrytoken — crane uses
+          # it as 'Authorization: Bearer <token>' on registry calls.
           mkdir -p ~/.docker
-          python3 -c "
-          import json, os, base64
-          tok = os.environ['TOKEN']
-          cfg = {'auths': {
-              'nvcr.io': {'registrytoken': tok},
-              'https://nvcr.io/v2/': {'registrytoken': tok},
-          }}
-          with open(os.path.expanduser('~/.docker/config.json'),'w') as f:
-              json.dump(cfg, f)
-          "
+          python3 -c 'import json,os; json.dump({"auths":{"nvcr.io":{"registrytoken":os.environ["TOKEN"]},"https://nvcr.io/v2/":{"registrytoken":os.environ["TOKEN"]}}}, open(os.path.expanduser("~/.docker/config.json"),"w"))'
 
-          # Aliyun login (crane reads docker config; layer Aliyun auth on top)
+          # Aliyun login on top (crane appends to the same config)
           echo "${ALIYUN_PASSWORD}" | crane auth login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
 
-          # Copy
           crane cp --platform=all "${SOURCE_REF}" "${TARGET_REF}"
-        env:
-          REGISTRY_HOST: registry.cn-hangzhou.aliyuncs.com
-          NAMESPACE: dslab
 
       - name: Sync image (non-nvcr.io path via crane)
         if: ${{ !inputs.dry_run && !startsWith(steps.resolve.outputs.source_ref, 'nvcr.io/') }}
