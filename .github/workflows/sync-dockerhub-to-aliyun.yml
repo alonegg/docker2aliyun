@@ -75,6 +75,19 @@ jobs:
             exit 1
           fi
 
+      - name: Free disk space (large NIM images can exceed default 14 GiB free)
+        if: ${{ !inputs.dry_run && startsWith(steps.resolve.outputs.source_ref, 'nvcr.io/nim/') }}
+        run: |
+          set -euo pipefail
+          echo "Before cleanup:"
+          df -h / | head -2
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android /usr/share/dotnet \
+                      /opt/ghc /opt/microsoft /usr/local/share/boost /usr/local/share/powershell \
+                      /usr/local/.ghcup /imagegeneration 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          echo "After cleanup:"
+          df -h / | head -2
+
       - name: Setup crane
         uses: imjasonh/setup-crane@v0.4
 
