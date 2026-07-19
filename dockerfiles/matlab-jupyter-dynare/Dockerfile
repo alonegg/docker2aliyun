@@ -103,7 +103,7 @@ RUN filename="/home/matlab/Documents/MATLAB/startup.m" \
 # ---- 6. JupyterLab + MATLAB kernel in a dedicated venv (Ubuntu 24.04 is PEP-668 managed) ----
 RUN python3 -m venv /opt/jupyter \
     && /opt/jupyter/bin/pip install --no-cache-dir --upgrade pip \
-    && /opt/jupyter/bin/pip install --no-cache-dir jupyterlab jupyter-matlab-proxy \
+    && /opt/jupyter/bin/pip install --no-cache-dir jupyterlab "ipykernel<7" jupyter-matlab-proxy \
     && ln -sf /opt/jupyter/bin/jupyter /usr/local/bin/jupyter \
     && test -x /usr/local/bin/matlab
 
