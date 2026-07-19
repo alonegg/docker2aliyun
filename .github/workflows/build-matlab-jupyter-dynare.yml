@@ -1,0 +1,127 @@
+name: Build MATLAB + JupyterLab + Dynare Image
+
+on:
+  workflow_dispatch:
+    inputs:
+      matlab_release:
+        description: "mathworks/matlab base tag, e.g. R2026a"
+        required: true
+        default: "R2026a"
+        type: string
+      dynare_version:
+        description: "Dynare git tag to compile, e.g. 7.1"
+        required: true
+        default: "7.1"
+        type: string
+      target_tag:
+        description: "Target tag override; default <dynare>-<matlab lowercase>, e.g. 7.1-r2026a"
+        required: false
+        default: ""
+        type: string
+      also_tag_latest:
+        description: "Additionally push :latest"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      REGISTRY_HOST: registry.cn-hangzhou.aliyuncs.com
+      NAMESPACE: dslab
+      IMAGE_REPO: matlab-jupyter-dynare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Validate required Aliyun secrets
+        env:
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${ALIYUN_USERNAME}" ] || [ -z "${ALIYUN_PASSWORD}" ]; then
+            echo "::error::Missing required secrets: ALIYUN_USERNAME and ALIYUN_PASSWORD."
+            exit 1
+          fi
+
+      - name: Resolve target refs
+        id: resolve
+        run: |
+          set -euo pipefail
+          MATLAB_LC=$(echo "${{ inputs.matlab_release }}" | tr '[:upper:]' '[:lower:]')
+          TAG="${{ inputs.target_tag }}"
+          [ -z "${TAG}" ] && TAG="${{ inputs.dynare_version }}-${MATLAB_LC}"
+          echo "target_ref=${REGISTRY_HOST}/${NAMESPACE}/${IMAGE_REPO}:${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "latest_ref=${REGISTRY_HOST}/${NAMESPACE}/${IMAGE_REPO}:latest" >> "${GITHUB_OUTPUT}"
+
+      - name: Free disk space (MATLAB + toolboxes build needs ~20 GB)
+        run: |
+          set -euo pipefail
+          echo "Before cleanup:"; df -h / | head -2
+          sudo rm -rf /opt/hostedtoolcache /usr/local/lib/android /usr/share/dotnet \
+                      /opt/ghc /opt/microsoft /usr/local/share/boost /usr/local/share/powershell \
+                      /usr/local/.ghcup /imagegeneration 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          sudo apt-get clean
+          echo "After cleanup:"; df -h / | head -2
+
+      - name: Build image
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg MATLAB_RELEASE="${{ inputs.matlab_release }}" \
+            --build-arg DYNARE_VERSION="${{ inputs.dynare_version }}" \
+            -t "${{ steps.resolve.outputs.target_ref }}" \
+            dockerfiles/matlab-jupyter-dynare
+          docker image ls "${REGISTRY_HOST}/${NAMESPACE}/${IMAGE_REPO}"
+          df -h / | head -2
+
+      - name: Smoke test (licence-free checks)
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /bin/bash "${{ steps.resolve.outputs.target_ref }}" -lc '
+            set -e
+            /opt/jupyter/bin/jupyter --version
+            /opt/jupyter/bin/jupyter kernelspec list
+            /opt/jupyter/bin/jupyter kernelspec list 2>&1 | grep -qi matlab
+            test -x /usr/local/bin/matlab
+            test -d /home/matlab/dynare/matlab
+            find /home/matlab/dynare/build-matlab -name "dynare-preprocessor*" | grep -q . \
+              || find /home/matlab/dynare/build-matlab -name "*.mex*" | grep -q .
+          '
+
+      - name: Login to Aliyun ACR
+        env:
+          ALIYUN_USERNAME: ${{ secrets.ALIYUN_USERNAME }}
+          ALIYUN_PASSWORD: ${{ secrets.ALIYUN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "${ALIYUN_PASSWORD}" | docker login "${REGISTRY_HOST}" -u "${ALIYUN_USERNAME}" --password-stdin
+
+      - name: Push (docker push — avoids ACR HTTP/2 stream errors seen with crane)
+        run: |
+          set -euo pipefail
+          docker push "${{ steps.resolve.outputs.target_ref }}"
+          if [ "${{ inputs.also_tag_latest }}" = "true" ]; then
+            docker tag "${{ steps.resolve.outputs.target_ref }}" "${{ steps.resolve.outputs.latest_ref }}"
+            docker push "${{ steps.resolve.outputs.latest_ref }}"
+          fi
+
+      - name: Publish run summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## MATLAB + JupyterLab + Dynare Build"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| MATLAB | ${{ inputs.matlab_release }} |"
+            echo "| Dynare | ${{ inputs.dynare_version }} |"
+            echo "| Target Image | \`${{ steps.resolve.outputs.target_ref }}\` |"
+          } >> "${GITHUB_STEP_SUMMARY}"
