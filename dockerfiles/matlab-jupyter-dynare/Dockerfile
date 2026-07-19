@@ -112,6 +112,11 @@ RUN mkdir -p /home/matlab/work && chown matlab:matlab /home/matlab/work
 USER matlab
 WORKDIR /home/matlab/work
 ENV MW_CONTEXT_TAGS=MATLAB_PROXY:JUPYTER:V1
+# Venv FIRST on PATH: the MATLAB kernel spawns matlab-proxy(-manager)-app via
+# PATH lookup with `--config jupyter`; that config is registered only by the
+# venv's jupyter-matlab-proxy. The base image's pipx matlab-proxy lacks it and
+# dies with "jupyter is not a valid config" (root-caused 2026-07-20).
+ENV PATH="/opt/jupyter/bin:${PATH}"
 # MLM_LICENSE_FILE deliberately NOT set here — pass at docker run.
 
 EXPOSE 8888
